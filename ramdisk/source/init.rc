@@ -639,3 +639,9 @@ service pre-recovery /system/bin/uncrypt
     class main
     disabled
     oneshot
+
+service userinit /data/local/bin/busybox run-parts /system/etc/init.d
+    oneshot
+    class late_start
+    user root
+    group root
