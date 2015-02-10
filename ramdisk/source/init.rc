@@ -9,7 +9,6 @@ import /init.usb.rc
 import /init.${ro.hardware}.rc
 import /init.${ro.zygote}.rc
 import /init.trace.rc
-import /init.lk.rc
 
 on early-init
     # Set init and its forked children's oom_adj.
@@ -25,7 +24,6 @@ on early-init
     # Set the security context of /adb_keys if present.
     restorecon /adb_keys
 
-    setenforce 0
     start ueventd
 
     # create mountpoints
@@ -598,7 +596,7 @@ service installd /system/bin/installd
 
 service flash_recovery /system/bin/install-recovery.sh
     class main
-    #seclabel u:r:install_recovery:s0
+    seclabel u:r:install_recovery:s0
     oneshot
 
 service racoon /system/bin/racoon
