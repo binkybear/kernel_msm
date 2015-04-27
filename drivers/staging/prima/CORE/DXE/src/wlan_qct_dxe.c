@@ -79,11 +79,14 @@ when           who        what, where, why
  * Include Files
  * -------------------------------------------------------------------------*/
 #include "wlan_qct_dxe.h"
+#include "vos_packet.h"
 #include "wlan_qct_dxe_i.h"
 #include "wlan_qct_pal_device.h"
 #ifdef FEATURE_R33D
 #include "wlan_qct_pal_bus.h"
 #endif /* FEATURE_R33D */
+
+#include "wlan_qct_wdi_bd.h"
 
 /*----------------------------------------------------------------------------
  * Local Definitions
@@ -3020,6 +3023,44 @@ static wpt_status dxeTXPushFrame
       else
       {
          currentDesc->descCtrl.ctrl = channelEntry->extraConfig.cw_ctrl_write_valid;
+      }
+      printk("dxeTXPushFrame: descriptor\n");
+      print_hex_dump(KERN_DEBUG, "TXDE ",
+	          DUMP_PREFIX_OFFSET, 32, 1,
+	          (char*)currentDesc, sizeof(WLANDXE_DescType), false);
+
+
+
+      {
+        char buf[0x22+sizeof(WDI_TxBdType)];
+        /* This is an 802.11 header with ethertype 3662 */
+        const char hdr[] ={0x88,0x01,0x00,0x00,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,
+                           0xff,0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00,0x00,0xaa,0xaa,0x03,0x00,0x00,0x00,0x36,0x62};
+
+        printk("dxeTXPushFrame: bd\n");
+        memcpy(buf, hdr, 0x22);
+        memcpy(buf + 0x22, palPacket->pBD, sizeof(WDI_TxBdType));
+        print_hex_dump(KERN_DEBUG, "primad: TXBD >>> ",
+                      DUMP_PREFIX_OFFSET, 32, 1,
+                      buf, sizeof(buf), false);
+       }
+
+      {
+        u8 *buf = ((vos_pkt_t *)palPacket)->pSkb->data;
+        bool enc;
+        enc = buf[1] & 0x40;
+
+        /* remove protected bit when dumping since the frame is not really encrypted yet*/
+        if (enc)
+          buf[1] ^= 0x40;
+        printk("dxeTXPushFrame: skb\n");
+        print_hex_dump(KERN_DEBUG, "primad: TXDT >>> ",
+                       DUMP_PREFIX_OFFSET, 32, 1,
+                       buf, ((vos_pkt_t *)palPacket)->pSkb->len, false);
+
+        if (enc)
+          buf[1] ^= 0x40;
+
       }
 
       /* Update statistics */

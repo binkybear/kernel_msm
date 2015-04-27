@@ -485,6 +485,7 @@ wpt_status wpalWriteRegister
       return eWLAN_PAL_STATUS_E_INVAL;
    }
 
+   printk("wpalWriteRegister: add=%08xx, data=%08xx\n", (int)address, (int)data);
    wmb();
    writel_relaxed(data, gpEnv->mmio + (address - WCNSS_BASE_ADDRESS));
 
@@ -530,6 +531,7 @@ wpt_status wpalReadRegister
    }
 
    *data = readl_relaxed(gpEnv->mmio + (address - WCNSS_BASE_ADDRESS));
+   printk("wpalReadRegister:  add=%08x, data=%08x\n", (int)address, (int)*data);
    rmb();
 
    return eWLAN_PAL_STATUS_SUCCESS;

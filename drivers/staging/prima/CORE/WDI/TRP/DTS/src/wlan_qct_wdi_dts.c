@@ -526,12 +526,30 @@ wpt_status WDTS_RxPacket (void *pContext, wpt_packet *pFrame, WDTS_ChannelType c
     return eWLAN_PAL_STATUS_E_FAILURE;
   }
   WDI_SwapRxBd(pBDHeader);
+  printk("WDTS_RxPacket:\n");
+
+  {
+    char buf[0x22+WDI_RX_BD_HEADER_SIZE];
+    /* This is an 802.11 header with ethertype 3661 */
+    const char hdr[] = {0x88,0x01,0x00,0x00,0x01,0x01,0x01,0x01,0x01,0x01,0xff,0xff,0xff,0xff,0xff,0x00,
+                        0x01,0x01,0x01,0x01,0x01,0x01,0x00,0x00,0x00,0x00,0xaa,0xaa,0x03,0x00,0x00,0x00,0x36,0x61};
+
+     memcpy(buf, hdr, 0x22);
+     memcpy(buf + 0x22, (char*)pBDHeader, WDI_RX_BD_HEADER_SIZE);
+     print_hex_dump(KERN_DEBUG, "primad: RXBD <<< ",
+	            DUMP_PREFIX_OFFSET, 32, 1,
+	            buf, sizeof(buf), false);
+  }
 
   ucMPDUHOffset = (wpt_uint8)WDI_RX_BD_GET_MPDU_H_OFFSET(pBDHeader);
   usMPDUDOffset = (wpt_uint16)WDI_RX_BD_GET_MPDU_D_OFFSET(pBDHeader);
   usMPDULen     = (wpt_uint16)WDI_RX_BD_GET_MPDU_LEN(pBDHeader);
   ucMPDUHLen    = (wpt_uint8)WDI_RX_BD_GET_MPDU_H_LEN(pBDHeader);
   ucTid         = (wpt_uint8)WDI_RX_BD_GET_TID(pBDHeader);
+
+  print_hex_dump(KERN_DEBUG, "primad: RXDT <<< ",
+	        DUMP_PREFIX_OFFSET, 32, 1,
+               (char*)pBDHeader+ucMPDUHOffset, usMPDULen, false);
 
   /*------------------------------------------------------------------------
     Gather AMSDU information 
