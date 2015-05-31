@@ -126,3 +126,4 @@ window                                    u:object_r:system_server_service:s0
 #line 1 "device/moto/shamu/sepolicy/service_contexts"
 rcs                                       u:object_r:radio_service:s0
 AtCmdFwd                                  u:object_r:atfwd_service:s0
+cneservice                                u:object_r:cne_service:s0
