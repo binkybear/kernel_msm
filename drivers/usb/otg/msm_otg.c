@@ -71,7 +71,7 @@
 #define USB_SUSPEND_DELAY_TIME	(500 * HZ/1000) /* 500 msec */
 
 //otg+charge: sysfs entry
-static bool usbhost_charge_mode = true;
+static bool usbhost_charge_mode = false;
 module_param(usbhost_charge_mode, bool, 0755); 
 
 enum msm_otg_phy_reg_mode {
