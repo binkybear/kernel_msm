@@ -3111,9 +3111,6 @@ functions_store(struct device *pdev, struct device_attribute *attr,
 		}
 	}
 
-	/* HID driver always enabled, it's the whole point of this kernel patch */
-	android_enable_function(dev, conf, "hid");
-
 	/* Free uneeded configurations if exists */
 	while (curr_conf->next != &dev->configs) {
 		conf = list_entry(curr_conf->next,
