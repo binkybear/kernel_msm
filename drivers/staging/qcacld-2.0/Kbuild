@@ -98,7 +98,7 @@ CONFIG_QCOM_ESE_UPLOAD := y
 # Feature flags which are not (currently) configurable via Kconfig
 
 #Whether to build debug version
-BUILD_DEBUG_VERSION := 1
+BUILD_DEBUG_VERSION := 0
 
 #Enable this flag to build driver in diag version
 BUILD_DIAG_VERSION := 1
@@ -908,6 +908,7 @@ CDEFINES :=	-DANI_LITTLE_BYTE_ENDIAN \
 		-DWLANTL_DEBUG\
 		-DWLAN_NS_OFFLOAD \
 		-DWLAN_ACTIVEMODE_OFFLOAD_FEATURE \
+		-DWLAN_FEATURE_HOLD_RX_WAKELOCK \
 		-DWLAN_SOFTAP_VSTA_FEATURE \
 		-DWLAN_FEATURE_ROAM_SCAN_OFFLOAD \
 		-DWLAN_FEATURE_GTK_OFFLOAD \
@@ -1316,10 +1317,6 @@ ifeq ($(CONFIG_WLAN_OFFLOAD_PACKETS),y)
 CDEFINES += -DWLAN_FEATURE_OFFLOAD_PACKETS
 endif
 
-ifeq ($(CONFIG_WLAN_FEATURE_RX_WAKELOCK), y)
-CDEFINES += -DWLAN_FEATURE_HOLD_RX_WAKELOCK
-endif
-
 KBUILD_CPPFLAGS += $(CDEFINES)
 
 # Currently, for versions of gcc which support it, the kernel Makefile
@@ -1327,7 +1324,7 @@ KBUILD_CPPFLAGS += $(CDEFINES)
 # WLAN driver.  Note that we must use EXTRA_CFLAGS here so that it
 # will override the kernel settings.
 ifeq ($(call cc-option-yn, -Wmaybe-uninitialized),y)
-EXTRA_CFLAGS += -Wmaybe-uninitialized
+EXTRA_CFLAGS += -Os -Wmaybe-uninitialized -Wno-error -Wno-return-type
 endif
 
 # Module information used by KBuild framework
