@@ -25,8 +25,6 @@
  * $Id: dhd_linux.c 419821 2013-08-22 21:43:26Z $
  */
 
-extern void dhd_check_debug_system(void *bus);
-
 #include <typedefs.h>
 #include <linuxver.h>
 #include <osl.h>
@@ -45,7 +43,7 @@ extern void dhd_check_debug_system(void *bus);
 #include <linux/fcntl.h>
 #include <linux/fs.h>
 #include <linux/ip.h>
-#include <linux/inet.h>
+#include <linux/netlink.h>
 #include <net/addrconf.h>
 
 #include <asm/uaccess.h>
@@ -100,6 +98,11 @@ typedef struct histo_ {
 
 static histo_t vi_d1, vi_d2, vi_d3, vi_d4;
 #endif /* WLMEDIA_HTSF */
+
+/* Netlink stuff for NexMon */
+#include <dhd_sdio.h>
+#define NETLINK_USER 31
+struct sock *nl_sk = NULL;
 
 
 #if defined(SOFTAP)
@@ -516,6 +519,9 @@ uint dhd_pktgen_len = 0;
 module_param(dhd_pktgen_len, uint, 0);
 #endif /* SDTEST */
 
+/* NexMon */
+dhd_info_t* nexmon_glob_dhd = NULL;
+
 /* Version string to report */
 #ifdef DHD_DEBUG
 #ifndef SRCBASE
@@ -571,7 +577,7 @@ static int dhd_toe_get(dhd_info_t *dhd, int idx, uint32 *toe_ol);
 static int dhd_toe_set(dhd_info_t *dhd, int idx, uint32 toe_ol);
 #endif /* TOE */
 
-static int dhd_wl_host_event(dhd_info_t *dhd, int *ifidx, void *pktdata, size_t pktlen,
+static int dhd_wl_host_event(dhd_info_t *dhd, int *ifidx, void *pktdata,
                              wl_event_msg_t *event_ptr, void **data_ptr);
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)) && (LINUX_VERSION_CODE <= \
@@ -1978,22 +1984,14 @@ dhd_rx_frame(dhd_pub_t *dhdp, int ifidx, void *pktbuf, int numpkt, uint8 chan,
 		/* Process special event packets and then discard them */
 		memset(&event, 0, sizeof(event));
 		if (ntoh16(skb->protocol) == ETHER_TYPE_BRCM) {
-			int ret_event;
-
-			ret_event = dhd_wl_host_event(dhd, &ifidx,
+			dhd_wl_host_event(dhd, &ifidx,
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 22)
 			skb_mac_header(skb),
 #else
 			skb->mac.raw,
 #endif
-			len,
 			&event,
 			&data);
-
-			if (ret_event != BCME_OK) {
-				PKTFREE(dhdp->osh, pktbuf, FALSE);
-				continue;
-			}
 
 			wl_event_to_host_order(&event);
 			if (!tout_ctrl)
@@ -3128,9 +3126,6 @@ dhd_open(struct net_device *net)
 
 		}
 
-		// here the debug system can be accessed
-		//dhd_check_debug_system(dhd->pub.bus);
-
 		/* dhd_prot_init has been called in dhd_bus_start or wl_android_wifi_on */
 		memcpy(net->dev_addr, dhd->pub.mac.octet, ETHER_ADDR_LEN);
 
@@ -3142,9 +3137,6 @@ dhd_open(struct net_device *net)
 			dhd->iflist[ifidx]->net->features &= ~NETIF_F_IP_CSUM;
 #endif /* TOE */
 
-		// Here it is not possible to access the debug system!
-		//dhd_check_debug_system(dhd->pub.bus);
-
 #if defined(WL_CFG80211)
 		if (unlikely(wl_cfg80211_up(NULL))) {
 			DHD_ERROR(("%s: failed to bring up cfg80211\n", __FUNCTION__));
@@ -3152,13 +3144,7 @@ dhd_open(struct net_device *net)
 			goto exit;
 		}
 #endif /* WL_CFG80211 */
-
-		// Here it is not possible to access the debug system!
-		//dhd_check_debug_system(dhd->pub.bus);
 	}
-
-	// Here it is not possible to access the debug system!
-	//dhd_check_debug_system(dhd->pub.bus);
 
 	/* Allow transmit calls */
 	netif_start_queue(net);
@@ -3175,8 +3161,6 @@ exit:
 
 	DHD_OS_WAKE_UNLOCK(&dhd->pub);
 
-	// Here it is not possible to access the debug system!
-	//dhd_check_debug_system(dhd->pub.bus);
 
 	return ret;
 }
@@ -3337,6 +3321,8 @@ dhd_attach(osl_t *osh, struct dhd_bus *bus, uint bus_hdrlen)
 
 	dhd_attach_states_t dhd_state = DHD_ATTACH_STATE_INIT;
 	DHD_TRACE(("%s: Enter\n", __FUNCTION__));
+
+    nexmon_glob_dhd = dhd;
 
 	/* updates firmware nvram path if it was provided as module parameters */
 	if (strlen(firmware_path) != 0) {
@@ -3705,15 +3691,9 @@ dhd_bus_start(dhd_pub_t *dhdp)
 
 	dhd_process_cid_mac(dhdp, TRUE);
 
-	// here the debug system can be accessed
-	//dhd_check_debug_system(dhd->pub.bus);
-
 	/* Bus is ready, do any protocol initialization */
 	if ((ret = dhd_prot_init(&dhd->pub)) < 0)
 		return ret;
-
-	// here the debug system can be accessed
-	//dhd_check_debug_system(dhd->pub.bus);
 
 	dhd_process_cid_mac(dhdp, FALSE);
 
@@ -4388,8 +4368,6 @@ dhd_preinit_ioctls(dhd_pub_t *dhd)
 #endif
 #endif /* DISABLE_11N */
 
-
-
 	/* query for 'ver' to get version info from firmware */
 	memset(buf, 0, sizeof(buf));
 	ptr = buf;
@@ -4692,6 +4670,26 @@ static int dhd_device_ipv6_event(struct notifier_block *this,
 	up(&dhd->thr_sysioc_ctl.sema);
 exit:
 	return NOTIFY_DONE;
+}
+
+/* NexMon */
+static void 
+nexmon_nl_recv_filter(struct sk_buff *skb) {
+
+    struct nlmsghdr *nlh;
+    
+    nlh = (struct nlmsghdr *)skb->data;
+    DHD_INFO(("Netlink received msg payload: %s\n", (char *)nlmsg_data(nlh)));
+
+
+    //awake from suspend
+    if(nexmon_glob_dhd != NULL) {
+        dhd_set_suspend(0, &nexmon_glob_dhd->pub);
+    }
+    
+    nexmon_send_filter_pkt();
+
+    return;
 }
 
 int
@@ -5022,88 +5020,13 @@ dhd_free(dhd_pub_t *dhdp)
 	}
 }
 
-struct socket *udpsocket = NULL;
-struct sockaddr_in from;
-char udpprintf_buf[4096];
-
-void
-dhd_udp_socket_init(short port)
-{
-	DHD_TRACE(("%s: Enter\n", __FUNCTION__));
-
-	sock_create(PF_INET, SOCK_DGRAM, IPPROTO_UDP, &udpsocket);
-
-	if(udpsocket) {
-		memset(&from, 0, sizeof(from));
-		from.sin_family = AF_INET;
-		from.sin_addr.s_addr = in_aton("127.0.0.1");
-		from.sin_port = htons(port);
-
-		udpsocket->ops->bind(udpsocket, (struct sockaddr *) &from, sizeof(from));
-	}
-}
-
-void
-dhd_udp_socket_cleanup(void)
-{
-	DHD_TRACE(("%s: Enter\n", __FUNCTION__));
-
-	if(udpsocket)
-		sock_release(udpsocket);
-}
-
-void
-dhd_send_udp_msg(short port, void *payload, int length)
-{
-	mm_segment_t oldfs;
-	struct msghdr msg;
-	struct iovec iov;
-	struct sockaddr_in to;
-
-	if(udpsocket) {
-		memset(&to, 0, sizeof(to));
-		to.sin_family = AF_INET;
-		to.sin_addr.s_addr = in_aton("127.0.0.1");
-		to.sin_port = htons(port);
-		
-		memset(&msg, 0, sizeof(msg));
-		msg.msg_name = &to;
-		msg.msg_namelen = sizeof(to);
-
-		iov.iov_base = payload;
-		iov.iov_len = length;
-
-		msg.msg_control = NULL;
-		msg.msg_controllen = 0;
-		msg.msg_iov = &iov;
-		msg.msg_iovlen = 1;
-
-		oldfs = get_fs();
-		set_fs(KERNEL_DS);
-		sock_sendmsg(udpsocket, &msg, length);
-		set_fs(oldfs);
-	}
-}
-
-void
-udpprintf(short port, const char *fmt, ...)
-{
-	va_list args;
-	int i;
-
-	va_start(args, fmt);
-	i = vsnprintf(udpprintf_buf, sizeof(udpprintf_buf), fmt, args);
-	va_end(args);
-
-	dhd_send_udp_msg(port, udpprintf_buf, i);
-}
-
 static void __exit
 dhd_module_cleanup(void)
 {
 	DHD_TRACE(("%s: Enter\n", __FUNCTION__));
 
-	dhd_udp_socket_cleanup();
+    /* NexMon */
+    netlink_kernel_release(nl_sk);
 
 	dhd_bus_unregister();
 
@@ -5115,6 +5038,7 @@ dhd_module_cleanup(void)
 	/* Call customer gpio to turn off power with WL_REG_ON signal */
 	dhd_customer_gpio_wlan_ctrl(WLAN_POWER_OFF);
 }
+
 
 #if defined(CONFIG_WIFI_CONTROL_FUNC)
 extern bool g_wifi_poweron;
@@ -5131,8 +5055,6 @@ dhd_module_init(void)
 #endif
 
 	DHD_TRACE(("%s: Enter\n", __FUNCTION__));
-
-	dhd_udp_socket_init(6688);
 
 	wl_android_init();
 
@@ -5236,6 +5158,13 @@ dhd_module_init(void)
 #if defined(WL_CFG80211)
 	wl_android_post_init();
 #endif /* defined(WL_CFG80211) */
+
+    /* NexMon */
+    nl_sk = netlink_kernel_create(&init_net, NETLINK_USER, 0, nexmon_nl_recv_filter, NULL, THIS_MODULE);
+    if (!nl_sk) {
+        DHD_ERROR(("%s: Error creating socket.\n", __FUNCTION__));
+        goto fail_2;
+    }
 
 	return error;
 
@@ -5588,13 +5517,13 @@ dhd_get_wireless_stats(struct net_device *dev)
 #endif /* defined(WL_WIRELESS_EXT) */
 
 static int
-dhd_wl_host_event(dhd_info_t *dhd, int *ifidx, void *pktdata, size_t pktlen,
+dhd_wl_host_event(dhd_info_t *dhd, int *ifidx, void *pktdata,
 	wl_event_msg_t *event, void **data)
 {
 	int bcmerror = 0;
 	ASSERT(dhd != NULL);
 
-	bcmerror = wl_host_event(&dhd->pub, ifidx, pktdata, pktlen, event, data);
+	bcmerror = wl_host_event(&dhd->pub, ifidx, pktdata, event, data);
 	if (bcmerror != BCME_OK)
 		return (bcmerror);
 
@@ -5603,11 +5532,12 @@ dhd_wl_host_event(dhd_info_t *dhd, int *ifidx, void *pktdata, size_t pktlen,
 		/*
 		 * Wireless ext is on primary interface only
 		 */
-		ASSERT(dhd->iflist[*ifidx] != NULL);
-		ASSERT(dhd->iflist[*ifidx]->net != NULL);
+
+	ASSERT(dhd->iflist[*ifidx] != NULL);
+	ASSERT(dhd->iflist[*ifidx]->net != NULL);
 
 		if (dhd->iflist[*ifidx]->net) {
-			wl_iw_event(dhd->iflist[*ifidx]->net, event, *data);
+		wl_iw_event(dhd->iflist[*ifidx]->net, event, *data);
 		}
 	}
 #endif /* defined(WL_WIRELESS_EXT)  */
@@ -5631,7 +5561,6 @@ dhd_wl_host_event(dhd_info_t *dhd, int *ifidx, void *pktdata, size_t pktlen,
 
 	ASSERT(dhd->iflist[*ifidx] != NULL);
 	ASSERT(dhd->iflist[*ifidx]->net != NULL);
-
 	if (dhd->iflist[*ifidx]->event2cfg80211 && dhd->iflist[*ifidx]->net) {
 		wl_cfg80211_event(dhd->iflist[*ifidx]->net, event, *data);
 	}
@@ -6734,8 +6663,6 @@ int dhd_ioctl_entry_local(struct net_device *net, wl_ioctl_t *ioc, int cmd)
 	int ret = 0;
 	dhd_info_t *dhd = NULL;
 
-	DHD_TRACE(("%s: Enter, cmd: %d\n", __FUNCTION__, cmd));
-
 	if (!net || !netdev_priv(net)) {
 		DHD_ERROR(("%s invalid parameter\n", __FUNCTION__));
 		return -EINVAL;
@@ -6823,21 +6750,8 @@ bool dhd_wlfc_skip_fc(void)
 
 #include <linux/debugfs.h>
 
-uint32
-dhd_readregl(void *bp, uint32 addr)
-{
-	DHD_TRACE(("%s: Enter, addr: %08x\n", __FUNCTION__, addr));
-
-	return 0;
-}
-
-uint32
-dhd_writeregl(void *bp, uint32 addr, uint32 data)
-{
-	DHD_TRACE(("%s: Enter, addr: %08x, data: %08x\n", __FUNCTION__, addr, data));
-
-	return 0;
-}
+extern uint32 dhd_readregl(void *bp, uint32 addr);
+extern uint32 dhd_writeregl(void *bp, uint32 addr, uint32 data);
 
 typedef struct dhd_dbgfs {
 	struct dentry	*debugfs_dir;
