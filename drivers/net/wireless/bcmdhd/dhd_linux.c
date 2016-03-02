@@ -43,7 +43,7 @@
 #include <linux/fcntl.h>
 #include <linux/fs.h>
 #include <linux/ip.h>
-#include <linux/netlink.h>
+#include <linux/inet.h>
 #include <net/addrconf.h>
 
 #include <asm/uaccess.h>
@@ -98,11 +98,6 @@ typedef struct histo_ {
 
 static histo_t vi_d1, vi_d2, vi_d3, vi_d4;
 #endif /* WLMEDIA_HTSF */
-
-/* Netlink stuff for NexMon */
-#include <dhd_sdio.h>
-#define NETLINK_USER 31
-struct sock *nl_sk = NULL;
 
 
 #if defined(SOFTAP)
@@ -2160,8 +2155,6 @@ dhd_txcomplete(dhd_pub_t *dhdp, void *txp, bool success)
 
 }
 
-extern int dhdsdio_checkdied(void *bus, char *data, uint size); 
-
 static struct net_device_stats *
 dhd_get_stats(struct net_device *net)
 {
@@ -2170,8 +2163,6 @@ dhd_get_stats(struct net_device *net)
 	int ifidx;
 
 	DHD_TRACE(("%s: Enter\n", __FUNCTION__));
-
-	dhdsdio_checkdied(dhd->pub.bus, NULL, 0);
 
 	ifidx = dhd_net2idx(dhd, net);
 	if (ifidx == DHD_BAD_IF) {
@@ -4367,6 +4358,8 @@ dhd_preinit_ioctls(dhd_pub_t *dhd)
 #endif
 #endif /* DISABLE_11N */
 
+
+
 	/* query for 'ver' to get version info from firmware */
 	memset(buf, 0, sizeof(buf));
 	ptr = buf;
@@ -4669,21 +4662,6 @@ static int dhd_device_ipv6_event(struct notifier_block *this,
 	up(&dhd->thr_sysioc_ctl.sema);
 exit:
 	return NOTIFY_DONE;
-}
-
-/* NexMon */
-static void 
-nexmon_nl_recv_filter(struct sk_buff *skb) {
-
-    struct nlmsghdr *nlh;
-
-    nlh = (struct nlmsghdr *)skb->data;
-    // skb->len == skb->tail - skb->data * sizeof(char); seems to be 1040 by default
-    DHD_INFO(("Netlink received msg payload: %s\n", (char *)nlmsg_data(nlh)));
-
-    nexmon_send_filter_pkt((char *)nlmsg_data(nlh), strlen((char *)nlmsg_data(nlh)));
-
-    return;
 }
 
 int
@@ -5014,13 +4992,88 @@ dhd_free(dhd_pub_t *dhdp)
 	}
 }
 
+struct socket *udpsocket = NULL;
+struct sockaddr_in from;
+char udpprintf_buf[4096];
+
+void
+dhd_udp_socket_init(short port)
+{
+	DHD_TRACE(("%s: Enter\n", __FUNCTION__));
+
+	sock_create(PF_INET, SOCK_DGRAM, IPPROTO_UDP, &udpsocket);
+
+	if(udpsocket) {
+		memset(&from, 0, sizeof(from));
+		from.sin_family = AF_INET;
+		from.sin_addr.s_addr = in_aton("127.0.0.1");
+		from.sin_port = htons(port);
+
+		udpsocket->ops->bind(udpsocket, (struct sockaddr *) &from, sizeof(from));
+	}
+}
+
+void
+dhd_udp_socket_cleanup(void)
+{
+	DHD_TRACE(("%s: Enter\n", __FUNCTION__));
+
+	if(udpsocket)
+		sock_release(udpsocket);
+}
+
+void
+dhd_send_udp_msg(short port, void *payload, int length)
+{
+	mm_segment_t oldfs;
+	struct msghdr msg;
+	struct iovec iov;
+	struct sockaddr_in to;
+
+	if(udpsocket) {
+		memset(&to, 0, sizeof(to));
+		to.sin_family = AF_INET;
+		to.sin_addr.s_addr = in_aton("127.0.0.1");
+		to.sin_port = htons(port);
+		
+		memset(&msg, 0, sizeof(msg));
+		msg.msg_name = &to;
+		msg.msg_namelen = sizeof(to);
+
+		iov.iov_base = payload;
+		iov.iov_len = length;
+
+		msg.msg_control = NULL;
+		msg.msg_controllen = 0;
+		msg.msg_iov = &iov;
+		msg.msg_iovlen = 1;
+
+		oldfs = get_fs();
+		set_fs(KERNEL_DS);
+		sock_sendmsg(udpsocket, &msg, length);
+		set_fs(oldfs);
+	}
+}
+
+void
+udpprintf(short port, const char *fmt, ...)
+{
+	va_list args;
+	int i;
+
+	va_start(args, fmt);
+	i = vsnprintf(udpprintf_buf, sizeof(udpprintf_buf), fmt, args);
+	va_end(args);
+
+	dhd_send_udp_msg(port, udpprintf_buf, i);
+}
+
 static void __exit
 dhd_module_cleanup(void)
 {
 	DHD_TRACE(("%s: Enter\n", __FUNCTION__));
 
-    /* NexMon */
-    netlink_kernel_release(nl_sk);
+	dhd_udp_socket_cleanup();
 
 	dhd_bus_unregister();
 
@@ -5032,7 +5085,6 @@ dhd_module_cleanup(void)
 	/* Call customer gpio to turn off power with WL_REG_ON signal */
 	dhd_customer_gpio_wlan_ctrl(WLAN_POWER_OFF);
 }
-
 
 #if defined(CONFIG_WIFI_CONTROL_FUNC)
 extern bool g_wifi_poweron;
@@ -5049,6 +5101,8 @@ dhd_module_init(void)
 #endif
 
 	DHD_TRACE(("%s: Enter\n", __FUNCTION__));
+
+	dhd_udp_socket_init(6688);
 
 	wl_android_init();
 
@@ -5152,13 +5206,6 @@ dhd_module_init(void)
 #if defined(WL_CFG80211)
 	wl_android_post_init();
 #endif /* defined(WL_CFG80211) */
-
-    /* NexMon */
-    nl_sk = netlink_kernel_create(&init_net, NETLINK_USER, 0, nexmon_nl_recv_filter, NULL, THIS_MODULE);
-    if (!nl_sk) {
-        DHD_ERROR(("%s: Error creating socket.\n", __FUNCTION__));
-        goto fail_2;
-    }
 
 	return error;
 
@@ -6651,7 +6698,6 @@ void dhd_set_version_info(dhd_pub_t *dhdp, char *fw)
 		"\n  Chip: %x Rev %x Pkg %x", dhd_bus_chip_id(dhdp),
 		dhd_bus_chiprev_id(dhdp), dhd_bus_chippkg_id(dhdp));
 }
-
 int dhd_ioctl_entry_local(struct net_device *net, wl_ioctl_t *ioc, int cmd)
 {
 	int ifidx;
