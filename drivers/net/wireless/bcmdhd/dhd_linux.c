@@ -25,6 +25,8 @@
  * $Id: dhd_linux.c 419821 2013-08-22 21:43:26Z $
  */
 
+extern void dhd_check_debug_system(void *bus);
+
 #include <typedefs.h>
 #include <linuxver.h>
 #include <osl.h>
@@ -2155,6 +2157,8 @@ dhd_txcomplete(dhd_pub_t *dhdp, void *txp, bool success)
 
 }
 
+extern int dhdsdio_checkdied(void *bus, char *data, uint size); 
+
 static struct net_device_stats *
 dhd_get_stats(struct net_device *net)
 {
@@ -2163,6 +2167,8 @@ dhd_get_stats(struct net_device *net)
 	int ifidx;
 
 	DHD_TRACE(("%s: Enter\n", __FUNCTION__));
+
+	//dhdsdio_checkdied(dhd->pub.bus, NULL, 0);
 
 	ifidx = dhd_net2idx(dhd, net);
 	if (ifidx == DHD_BAD_IF) {
@@ -3118,6 +3124,9 @@ dhd_open(struct net_device *net)
 
 		}
 
+		// here the debug system can be accessed
+		//dhd_check_debug_system(dhd->pub.bus);
+
 		/* dhd_prot_init has been called in dhd_bus_start or wl_android_wifi_on */
 		memcpy(net->dev_addr, dhd->pub.mac.octet, ETHER_ADDR_LEN);
 
@@ -3129,6 +3138,9 @@ dhd_open(struct net_device *net)
 			dhd->iflist[ifidx]->net->features &= ~NETIF_F_IP_CSUM;
 #endif /* TOE */
 
+		// Here it is not possible to access the debug system!
+		//dhd_check_debug_system(dhd->pub.bus);
+
 #if defined(WL_CFG80211)
 		if (unlikely(wl_cfg80211_up(NULL))) {
 			DHD_ERROR(("%s: failed to bring up cfg80211\n", __FUNCTION__));
@@ -3136,7 +3148,13 @@ dhd_open(struct net_device *net)
 			goto exit;
 		}
 #endif /* WL_CFG80211 */
+
+		// Here it is not possible to access the debug system!
+		//dhd_check_debug_system(dhd->pub.bus);
 	}
+
+	// Here it is not possible to access the debug system!
+	//dhd_check_debug_system(dhd->pub.bus);
 
 	/* Allow transmit calls */
 	netif_start_queue(net);
@@ -3153,6 +3171,8 @@ exit:
 
 	DHD_OS_WAKE_UNLOCK(&dhd->pub);
 
+	// Here it is not possible to access the debug system!
+	//dhd_check_debug_system(dhd->pub.bus);
 
 	return ret;
 }
@@ -3681,9 +3701,15 @@ dhd_bus_start(dhd_pub_t *dhdp)
 
 	dhd_process_cid_mac(dhdp, TRUE);
 
+	// here the debug system can be accessed
+	//dhd_check_debug_system(dhd->pub.bus);
+
 	/* Bus is ready, do any protocol initialization */
 	if ((ret = dhd_prot_init(&dhd->pub)) < 0)
 		return ret;
+
+	// here the debug system can be accessed
+	//dhd_check_debug_system(dhd->pub.bus);
 
 	dhd_process_cid_mac(dhdp, FALSE);
 
@@ -6698,11 +6724,14 @@ void dhd_set_version_info(dhd_pub_t *dhdp, char *fw)
 		"\n  Chip: %x Rev %x Pkg %x", dhd_bus_chip_id(dhdp),
 		dhd_bus_chiprev_id(dhdp), dhd_bus_chippkg_id(dhdp));
 }
+
 int dhd_ioctl_entry_local(struct net_device *net, wl_ioctl_t *ioc, int cmd)
 {
 	int ifidx;
 	int ret = 0;
 	dhd_info_t *dhd = NULL;
+
+	DHD_TRACE(("%s: Enter, cmd: %d\n", __FUNCTION__, cmd));
 
 	if (!net || !netdev_priv(net)) {
 		DHD_ERROR(("%s invalid parameter\n", __FUNCTION__));
@@ -6791,8 +6820,21 @@ bool dhd_wlfc_skip_fc(void)
 
 #include <linux/debugfs.h>
 
-extern uint32 dhd_readregl(void *bp, uint32 addr);
-extern uint32 dhd_writeregl(void *bp, uint32 addr, uint32 data);
+uint32
+dhd_readregl(void *bp, uint32 addr)
+{
+	DHD_TRACE(("%s: Enter, addr: %08x\n", __FUNCTION__, addr));
+
+	return 0;
+}
+
+uint32
+dhd_writeregl(void *bp, uint32 addr, uint32 data)
+{
+	DHD_TRACE(("%s: Enter, addr: %08x, data: %08x\n", __FUNCTION__, addr, data));
+
+	return 0;
+}
 
 typedef struct dhd_dbgfs {
 	struct dentry	*debugfs_dir;
