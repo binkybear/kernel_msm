@@ -3062,4 +3062,11 @@ config WALL_CLK_SYSFS
 	 Support the wallclk directory in sysfs filesystem to enable the
 	 wall clock simulation and read the current SFN.
 
+config USBHOST  # tmtmtm
+	bool "USBHOST related runtime configuration"
+	default y
+ 	help
+ 	  A simple sysfs interface to allow switching between OTG and FI mode.
+
 endif
+
