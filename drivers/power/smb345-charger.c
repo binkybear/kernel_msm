@@ -4,6 +4,7 @@
   * Charger driver for Summit SMB345
   *
   * Copyright (c) 2012, ASUSTek Inc.
+  * Copyright (c) 2014-2015, timur.mehrvarz@riseup.net
   *
   * This program is free software; you can redistribute it and/or modify
   * it under the terms of the GNU General Public License as published by
@@ -119,6 +120,9 @@ extern int  bq27541_battery_callback(unsigned usb_cable_state);
 extern int  bq27541_wireless_callback(unsigned wireless_state);
 extern void touch_callback(unsigned cable_status);
 static ssize_t smb345_reg_show(struct device *dev, struct device_attribute *attr, char *buf);
+static ssize_t smb345_float_voltage_show(struct device *dev, struct device_attribute *attr, char *buf);
+static ssize_t smb345_float_voltage_store(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count);
 
 /* Global variables */
 static struct smb345_charger *charger;
@@ -132,12 +136,23 @@ extern int ac_on;
 extern int usb_on;
 static bool wpc_en;
 static bool disable_DCIN;
+static int float_volt_setting = 4300;
+extern int usbhost_fixed_install_mode;
+extern int usbhost_fastcharge_in_host_mode;
+extern int usbhost_hostmode;
+extern int usbhost_charging_state;
+extern volatile int usbhost_external_power;
+extern volatile int usbhost_charge_slave_devices;
+extern bool otg_plugged;
 
 /* Sysfs interface */
 static DEVICE_ATTR(reg_status, S_IWUSR | S_IRUGO, smb345_reg_show, NULL);
+static DEVICE_ATTR(float_voltage, 0644, smb345_float_voltage_show,
+	smb345_float_voltage_store);
 
 static struct attribute *smb345_attributes[] = {
 	&dev_attr_reg_status.attr,
+	&dev_attr_float_voltage.attr,
 NULL
 };
 
@@ -718,6 +733,7 @@ static int smb345_configure_otg(struct i2c_client *client)
 		goto error;
        }
 
+	if(!usbhost_fixed_install_mode && !usbhost_charging_state) {
 	/* Change "OTG output current limit" to 250mA */
       ret = smb345_write(client, smb345_OTG_TLIM_REG, 0x34);
        if (ret < 0) {
@@ -725,6 +741,7 @@ static int smb345_configure_otg(struct i2c_client *client)
 			"register 0x%02x\n", __func__, smb345_OTG_TLIM_REG);
 		goto error;
        }
+    }
 
 	/* Enable OTG */
        ret = smb345_update_reg(client, smb345_CMD_REG, 0x10);
@@ -734,6 +751,7 @@ static int smb345_configure_otg(struct i2c_client *client)
 		goto error;
        }
 
+	if(!usbhost_fixed_install_mode && !usbhost_charging_state) {
 	/* Change "OTG output current limit" from 250mA to 750mA */
 	ret = smb345_update_reg(client, smb345_OTG_TLIM_REG, 0x08);
        if (ret < 0) {
@@ -741,6 +759,7 @@ static int smb345_configure_otg(struct i2c_client *client)
 			"0x%02x\n", __func__, smb345_OTG_TLIM_REG);
 		goto error;
        }
+    }
 
 	/* Change OTG to Pin control */
        ret = smb345_write(client, smb345_CTRL_REG, 0x65);
@@ -778,11 +797,19 @@ void smb345_otg_status(bool on)
 				"otg..\n", __func__);
 			return;
 		}
+
+		otg_on = true;
+		usbhost_hostmode = 1;
+		otg_plugged = true;
+
 		if (wireless_is_plugged())
 			wireless_reset();
 		return;
-	} else
-		otg_on = false;
+	}
+
+	otg_on = false;
+	usbhost_hostmode = 0;
+	otg_plugged = false;
 
 	if (wireless_is_plugged())
 		wireless_set();
@@ -853,15 +880,23 @@ int usb_cable_type_detect(unsigned int chgr_type)
 			}
 		}
 		success =  bq27541_battery_callback(non_cable);
+
+		usbhost_external_power = 0;
+	    usbhost_charging_state = 0;
+
 		touch_callback(non_cable);
 	} else {
 		SMB_NOTICE("INOK=L\n");
+
+		usbhost_external_power = 1;
+	    usbhost_charging_state = 1;
 
 		if (chgr_type == CHARGER_SDP) {
 			SMB_NOTICE("Cable: SDP\n");
 			smb345_vflt_setting();
 			success =  bq27541_battery_callback(usb_cable);
 			touch_callback(usb_cable);
+			smb345_set_InputCurrentlimit(client, 500);
 		} else {
 			if (chgr_type == CHARGER_CDP) {
 				SMB_NOTICE("Cable: CDP\n");
@@ -871,6 +906,7 @@ int usb_cable_type_detect(unsigned int chgr_type)
 				SMB_NOTICE("Cable: OTHER\n");
 			} else if (chgr_type == CHARGER_ACA) {
 				SMB_NOTICE("Cable: ACA\n");
+			    usbhost_charging_state = 2;
 			} else {
 				SMB_NOTICE("Cable: TBD\n");
 				smb345_vflt_setting();
@@ -904,6 +940,20 @@ done:
 	return success;
 }
 EXPORT_SYMBOL_GPL(usb_cable_type_detect);
+
+void smb345_event_fastcharge(void) {
+	printk("smb345_event_fastcharge chrgstate=%d fast=%d\n",
+			usbhost_charging_state,usbhost_fastcharge_in_host_mode);
+
+	if(usbhost_charging_state) {
+		if(usbhost_fastcharge_in_host_mode) {
+			usb_cable_type_detect(CHARGER_ACA);
+		} else {
+			usb_cable_type_detect(CHARGER_SDP);
+		}
+	}
+}
+//EXPORT_SYMBOL_GPL(smb345_event_fastcharge);
 
 /* Sysfs function */
 static ssize_t smb345_reg_show(struct device *dev, struct device_attribute *attr, char *buf)
@@ -942,6 +992,30 @@ static ssize_t smb345_reg_show(struct device *dev, struct device_attribute *attr
 	return strlen(buf);
 }
 
+static ssize_t smb345_float_voltage_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%u\n", float_volt_setting);
+}
+
+/* Set charger float voltage; desired value in mV. */
+static ssize_t smb345_float_voltage_store(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	int val = 0;
+
+	if(kstrtoint(buf, 0, &val) != 0)
+		goto error;
+	val = (val / 20) * 20; /* the charger can only do 20mV increments */
+	if(val < 3800 || val > 4300)
+		goto error;
+
+	float_volt_setting = val;
+
+	return count;
+error:
+	return -EINVAL;
+}
+
 static int smb345_otg_setting(struct i2c_client *client)
 {
 	int ret;
@@ -970,13 +1044,15 @@ static int smb345_otg_setting(struct i2c_client *client)
 		goto error;
        }
 
-	/* Change "OTG output current limit" to 250mA */
-	ret = smb345_update_reg(client, smb345_OTG_TLIM_REG, 0x34);
+	if(!usbhost_fixed_install_mode && !usbhost_charging_state) {
+		/* Change "OTG output current limit" to 250mA */
+		ret = smb345_update_reg(client, smb345_OTG_TLIM_REG, 0x34);
        if (ret < 0) {
 		dev_err(&client->dev, "%s(): Failed in writing"
 			"register 0x%02x\n", __func__, smb345_OTG_TLIM_REG);
 		goto error;
        }
+	}
 
 	/* Disable volatile writes to registers */
 	ret = smb345_volatile_writes(client, smb345_DISABLE_WRITE);
@@ -1101,6 +1177,18 @@ int smb345_config_thermal_charging(int temp, int volt, int rule)
 	struct i2c_client *client = charger->client;
 	int ret = 0, retval, setting = 0;
 	int BAT_Mid_Temp = BAT_Mid_Temp_Wired;
+	/*Charger float voltage for normal temperature conditions. Default 4.3V.*/
+	int flt_volt_43 = FLOAT_VOLT_43V;
+	/*Charger float voltage for high temperature conditions. Default 4.1V.*/
+	int flt_volt_low = FLOAT_VOLT_LOW;
+
+	flt_volt_43 = (float_volt_setting - 3500) / 20;
+
+	if(flt_volt_43 < 0 || flt_volt_43 > FLOAT_VOLT_43V) {
+		SMB_NOTICE("BUG: Invalid float voltage setting calculated: %d\n", flt_volt_43);
+		flt_volt_43 = FLOAT_VOLT_43V;
+	}
+	if(flt_volt_low > flt_volt_43) flt_volt_low = flt_volt_43;
 
 	if (rule == THERMAL_RULE1)
 		BAT_Mid_Temp = BAT_Mid_Temp_Wired;
@@ -1130,10 +1218,10 @@ int smb345_config_thermal_charging(int temp, int volt, int rule)
 	if (temp <= BAT_Mid_Temp
 		|| (temp > BAT_Mid_Temp && volt > FLOAT_VOLT_LOW_DECIMAL)
 		|| temp > BAT_Hot_Limit) {
-		if (setting != FLOAT_VOLT_43V) {
+		if (setting != flt_volt_43) {
 			setting = retval & (~FLOAT_VOLT_MASK);
-			setting |= FLOAT_VOLT_43V;
-			SMB_NOTICE("Set Float Volt, retval=%x setting=%x\n", retval, setting);
+			setting |= flt_volt_43;
+			SMB_NOTICE("Set Float Volt, retval=%x setting=%x V=%dmV\n", retval, setting, float_volt_setting);
 			ret = smb345_write(client, smb345_FLOAT_VLTG, setting);
 			if (ret < 0) {
 				dev_err(&client->dev, "%s(): Failed in writing 0x%02x to register"
@@ -1141,11 +1229,11 @@ int smb345_config_thermal_charging(int temp, int volt, int rule)
 				goto error;
 			}
 		} else
-			SMB_NOTICE("Bypass set Float Volt=%x\n", retval);
+			SMB_NOTICE("Bypass set Float Volt setting=%x V=%dmV\n", retval, float_volt_setting);
 	} else {
-		if (setting != FLOAT_VOLT_LOW) {
+		if (setting != flt_volt_low) {
 			setting = retval & (~FLOAT_VOLT_MASK);
-			setting |= FLOAT_VOLT_LOW;
+			setting |= flt_volt_low;
 			SMB_NOTICE("Set Float Volt, retval=%x setting=%x\n", retval, setting);
 			ret = smb345_write(client, smb345_FLOAT_VLTG, setting);
 			if (ret < 0) {
