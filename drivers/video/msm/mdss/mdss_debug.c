@@ -731,7 +731,7 @@ void mdss_dump_reg(const char *name, char __iomem *base, int len, bool dump_in_m
 				iterator = iterator->next;
 			iterator->next = dump_info;
 		}
-		pr_info("start_address:%p end_address:%p\n", dump_addr,
+		pr_info("start_address:%pK end_address:%pK\n", dump_addr,
 			dump_addr + dump_info->len);
 
 		mutex_unlock(&reg_dump_info_mutex);
@@ -744,7 +744,7 @@ void mdss_dump_reg(const char *name, char __iomem *base, int len, bool dump_in_m
 		x8 = readl_relaxed(addr+0x8);
 		xc = readl_relaxed(addr+0xc);
 		if (!dump_in_memory) {
-			pr_info("%p : %08x %08x %08x %08x\n", addr, x0, x4, x8, xc);
+			pr_info("%pK : %08x %08x %08x %08x\n", addr, x0, x4, x8, xc);
 		} else {
 			dump_addr[i*4] = x0;
 			dump_addr[i*4 + 1] = x4;
@@ -895,7 +895,7 @@ static void mdss_dump_mdp_debug_bus(bool dump_in_memory)
 				iterator = iterator->next;
 			iterator->next = dump_info;
 		}
-		pr_info("mdp debug bus dump start_address:%p end_address:%p\n",
+		pr_info("mdp debug bus dump start_address:%pK end_address:%pK\n",
 			dump_addr, dump_addr + dump_info->len);
 
 		mutex_unlock(&reg_dump_info_mutex);
@@ -1074,7 +1074,7 @@ static void mdss_dump_dsi_debug_bus(bool dump_in_memory, const char *name,
 				iterator = iterator->next;
 			iterator->next = dump_info;
 		}
-		pr_info("%s debug bus dump start_address:%p end_address:%p\n",
+		pr_info("%s debug bus dump start_address:%pK end_address:%pK\n",
 			name, dump_addr, dump_addr + dump_info->len);
 
 		mutex_unlock(&reg_dump_info_mutex);
@@ -1194,7 +1194,7 @@ static inline struct mdss_mdp_misr_map *mdss_misr_get_map(u32 block_id)
 {
 	struct mdss_mdp_misr_map *map;
 
-	if (block_id > DISPLAY_MISR_MDP) {
+	if (block_id > DISPLAY_MISR_HDMI && block_id != DISPLAY_MISR_MDP) {
 		pr_err("MISR Block id (%d) out of range\n", block_id);
 		return NULL;
 	}
@@ -1244,6 +1244,12 @@ int mdss_misr_set(struct mdss_data_type *mdata,
 	u32 mixer_num = 0;
 	bool is_valid_wb_mixer = true;
 	bool use_mdp_up_misr = false;
+
+	if (!mdata || !req || !ctl) {
+		pr_err("Invalid input params: mdata = %pK req = %pK ctl = %pK",
+			mdata, req, ctl);
+		return -EINVAL;
+	}
 
 	map = mdss_misr_get_map(req->block_id);
 	use_mdp_up_misr = switch_mdp_misr_offset(map, mdata->mdp_rev,
